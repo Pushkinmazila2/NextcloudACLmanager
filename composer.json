@@ -1,0 +1,14 @@
+{
+  "name":        "company/nc-acl-manager",
+  "description": "Nextcloud ACL Manager",
+  "type":        "nextcloud-app",
+  "license":     "AGPL-3.0-or-later",
+  "require": {
+    "php": ">=8.1"
+  },
+  "autoload": {
+    "psr-4": {
+      "OCA\\NcAclManager\\": "lib/"
+    }
+  }
+}

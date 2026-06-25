@@ -1,0 +1,29 @@
+{
+  "name": "ncaclmanager",
+  "version": "1.0.0",
+  "description": "Nextcloud ACL Manager plugin",
+  "private": true,
+  "scripts": {
+    "dev":   "webpack --node-env development",
+    "watch": "webpack --node-env development --watch",
+    "build": "webpack --node-env production"
+  },
+  "dependencies": {
+    "@nextcloud/auth":     "^2.3.0",
+    "@nextcloud/axios":    "^2.4.0",
+    "@nextcloud/dialogs":  "^5.2.0",
+    "@nextcloud/l10n":     "^3.1.0",
+    "@nextcloud/router":   "^3.0.1",
+    "@nextcloud/vue":      "^8.14.0",
+    "vue":                 "^3.4.0",
+    "vue-material-design-icons": "^5.3.0"
+  },
+  "devDependencies": {
+    "@nextcloud/webpack-vue-config": "^6.0.1",
+    "@nextcloud/browserslist-config": "^3.0.0",
+    "css-loader":    "^6.8.1",
+    "vue-loader":    "^17.4.0",
+    "webpack":       "^5.90.0",
+    "webpack-cli":   "^5.1.4"
+  }
+}

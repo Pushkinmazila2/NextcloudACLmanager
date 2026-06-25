@@ -1,0 +1,16 @@
+/* Иконка в sidebar tab */
+.icon-lock::before {
+  background-image: url('../img/lock.svg');
+}
+
+/* Sidebar tab */
+.app-sidebar-tab[data-tab="acl"] {
+  padding: 0;
+}
+
+/* Адаптация под тёмную тему NC */
+@media (prefers-color-scheme: dark) {
+  .acl-panel {
+    color-scheme: dark;
+  }
+}

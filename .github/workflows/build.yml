@@ -18,34 +18,26 @@ jobs:
 
     - name: Install dependencies and build JS
       run: |
-        # Выводим текущую директорию и список файлов для диагностики
-        pwd
-        ls -la
-        
-        # В зависимости от результата ls, выберите нужный блок ниже:
-        
-        # ВАРИАНТ А: Если файлы (package.json) лежат прямо в корне репозитория:
-        npm install
+        # Установка зависимостей с игнорированием конфликтов версий Vue 2/3
+        npm install --legacy-peer-deps
         npm run build
 
     - name: Prepare production artifact
       run: |
-        # Создаем временную чистую папку для финального архива
+        # Создаем временную чистую папку сборки
         mkdir dist_build
         
-        # Копируем статические ресурсы и PHP исходники
-        cp -r NextcloudACLmanager/appinfo dist_build/
-        cp -r NextcloudACLmanager/lib dist_build/
-        cp -r NextcloudACLmanager/templates dist_build/
-        cp -r NextcloudACLmanager/css dist_build/
-        cp -r NextcloudACLmanager/img dist_build/
+        # Копируем файлы прямо из корня репозитория
+        cp -r appinfo dist_build/
+        cp -r lib dist_build/
+        cp -r templates dist_build/
+        cp -r css dist_build/
+        cp -r img dist_build/
         
-        # Webpack собирает скомпилированный JS (иногда и CSS) в папку js/
-        # Проверяем её наличие после сборки и копируем в релиз
-        if [ -d "NextcloudACLmanager/js" ]; then cp -r NextcloudACLmanager/js dist_build/; fi
+        # Проверяем папку скомпилированного JS и копируем ее, если она создалась
+        if [ -d "js" ]; then cp -r js dist_build/; fi
         
-        # Переименовываем папку сборки в системный ID плагина (обычно ncaclmanager)
-        # Это важно, так как Nextcloud определяет плагин по названию его корневой папки
+        # Переименовываем во внутренний ID плагина Nextcloud
         mv dist_build ncaclmanager
 
     - name: Archive production artifact

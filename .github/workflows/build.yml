@@ -18,7 +18,13 @@ jobs:
 
     - name: Install dependencies and build JS
       run: |
-        cd NextcloudACLmanager
+        # Выводим текущую директорию и список файлов для диагностики
+        pwd
+        ls -la
+        
+        # В зависимости от результата ls, выберите нужный блок ниже:
+        
+        # ВАРИАНТ А: Если файлы (package.json) лежат прямо в корне репозитория:
         npm install
         npm run build
 

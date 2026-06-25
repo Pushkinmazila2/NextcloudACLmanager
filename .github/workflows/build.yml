@@ -18,9 +18,15 @@ jobs:
 
     - name: Install dependencies and build JS
       run: |
-        # Установка зависимостей с игнорированием конфликтов версий Vue 2/3
+        # Установка основных зависимостей с игнорированием конфликтов версий Vue
         npm install --legacy-peer-deps
+        
+        # Явная доустановка недостающих модулей для webpack-vue-config
+        npm install node-polyfill-webpack-plugin node-loader --save-dev --legacy-peer-deps
+        
+        # Запуск сборки
         npm run build
+
 
     - name: Prepare production artifact
       run: |

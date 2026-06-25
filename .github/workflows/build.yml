@@ -1,0 +1,50 @@
+name: Build Nextcloud Plugin
+
+on:
+  workflow_dispatch: # Позволяет запускать сборку вручную
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-node-version: '20' # Используйте стабильную версию LTS
+        cache: 'npm'
+        cache-dependency-path: ncaclmanager/package.json
+
+    - name: Install dependencies and build JS
+      run: |
+        cd ncaclmanager
+        npm ci
+        npm run build
+
+    - name: Prepare production artifact
+      run: |
+        # Создаем временную директорию для сборки чистого плагина
+        mkdir dist_build
+        
+        # Копируем только то, что нужно для работы плагина в Nextcloud
+        cp -r ncaclmanager/appinfo dist_build/
+        cp -r ncaclmanager/lib dist_build/
+        cp -r ncaclmanager/templates dist_build/
+        cp -r ncaclmanager/css dist_build/
+        cp -r ncaclmanager/img dist_build/
+        
+        # Если webpack собирает JS-файлы в папки js/ или css/, убедитесь, что они тоже копируются.
+        # Например, если сборка идет в ncaclmanager/js:
+        if [ -d "ncaclmanager/js" ]; then cp -r ncaclmanager/js dist_build/; fi
+        
+        # Переименовываем папку сборки в системное имя плагина
+        mv dist_build ncaclmanager_release
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ncaclmanager-plugin
+        path: ncaclmanager_release/

@@ -14,38 +14,40 @@ jobs:
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '24' # Исправлен параметр и версия Node.js
+        node-version: '24'
         cache: 'npm'
-        cache-dependency-path: 'ncaclmanager/package-lock.json' # Явно указываем lock-файл для кэша
+        cache-dependency-path: '**/package-lock.json' 
 
     - name: Install dependencies and build JS
       run: |
-        cd ncaclmanager
-        npm ci
+        cd NextcloudACLmanager # Исправлено имя папки с учетом регистра
+        if [ -f "package-lock.json" ]; then
+          npm ci
+        else
+          npm install
+        fi
         npm run build
 
     - name: Prepare production artifact
       run: |
-        # Создаем чистую структуру для архива
         mkdir dist_build
         
-        # Копируем PHP исходники и метаданные
-        cp -r ncaclmanager/appinfo dist_build/
-        cp -r ncaclmanager/lib dist_build/
-        cp -r ncaclmanager/templates dist_build/
-        cp -r ncaclmanager/css dist_build/
-        cp -r ncaclmanager/img dist_build/
+        # Копируем исходники из правильной папки
+        cp -r NextcloudACLmanager/appinfo dist_build/
+        cp -r NextcloudACLmanager/lib dist_build/
+        cp -r NextcloudACLmanager/templates dist_build/
+        cp -r NextcloudACLmanager/css dist_build/
+        cp -r NextcloudACLmanager/img dist_build/
         
-        # Nextcloud ищет скомпилированный JS в папке js/. 
-        # Если Webpack собирает файлы туда, копируем её:
-        if [ -d "ncaclmanager/js" ]; then cp -r ncaclmanager/js dist_build/; fi
+        # Стандартный сборщик Nextcloud сохраняет билд в папку js/
+        if [ -d "NextcloudACLmanager/js" ]; then cp -r NextcloudACLmanager/js dist_build/; fi
         
-        # Переименовываем папку в финальное имя плагина
+        # Системное имя папки плагина внутри Nextcloud (должно совпадать с ID из appinfo/info.xml)
+        # Обычно это ncaclmanager
         mv dist_build ncaclmanager
 
     - name: Archive production artifact
       run: |
-        # Запаковываем в zip, чтобы плагин можно было сразу скачать и поставить
         zip -r ncaclmanager-plugin.zip ncaclmanager
 
     - name: Upload artifact

@@ -15,35 +15,31 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '24'
-        cache: 'npm'
-        cache-dependency-path: '**/package-lock.json' 
 
     - name: Install dependencies and build JS
       run: |
-        cd NextcloudACLmanager # Исправлено имя папки с учетом регистра
-        if [ -f "package-lock.json" ]; then
-          npm ci
-        else
-          npm install
-        fi
+        cd NextcloudACLmanager
+        npm install
         npm run build
 
     - name: Prepare production artifact
       run: |
+        # Создаем временную чистую папку для финального архива
         mkdir dist_build
         
-        # Копируем исходники из правильной папки
+        # Копируем статические ресурсы и PHP исходники
         cp -r NextcloudACLmanager/appinfo dist_build/
         cp -r NextcloudACLmanager/lib dist_build/
         cp -r NextcloudACLmanager/templates dist_build/
         cp -r NextcloudACLmanager/css dist_build/
         cp -r NextcloudACLmanager/img dist_build/
         
-        # Стандартный сборщик Nextcloud сохраняет билд в папку js/
+        # Webpack собирает скомпилированный JS (иногда и CSS) в папку js/
+        # Проверяем её наличие после сборки и копируем в релиз
         if [ -d "NextcloudACLmanager/js" ]; then cp -r NextcloudACLmanager/js dist_build/; fi
         
-        # Системное имя папки плагина внутри Nextcloud (должно совпадать с ID из appinfo/info.xml)
-        # Обычно это ncaclmanager
+        # Переименовываем папку сборки в системный ID плагина (обычно ncaclmanager)
+        # Это важно, так как Nextcloud определяет плагин по названию его корневой папки
         mv dist_build ncaclmanager
 
     - name: Archive production artifact

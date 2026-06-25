@@ -1,6 +1,5 @@
 import { ref, computed } from 'vue'
-import { showError, showSuccess } from '@nextcloud/dialogs'
-import { translate as t } from '@nextcloud/l10n'
+import { showError, showSuccess, t } from '../api/nc.js'
 import {
   getFolderGroups, createFolderGroups, deleteFolderGroups,
   getGroupMembers, addGroupMember, removeGroupMember,
@@ -8,38 +7,36 @@ import {
 } from '../api/agent.js'
 
 export function useAcl(folderPath) {
-  // ── Состояние ─────────────────────────────────────────────────────
   const loading       = ref(false)
-  const groupSet      = ref(null)   // { folderPath, RO, RX, RW }
-  const expandedGroup = ref(null)   // sAMAccountName открытой группы
-  const membersCache  = ref({})     // groupName → { members, loading }
+  const groupSet      = ref(null)
+  const expandedGroup = ref(null)
+  const membersCache  = ref({})
   const searchQuery   = ref('')
   const searchResults = ref([])
   const searchLoading = ref(false)
   const searchTimer   = ref(null)
 
-  // ── Вычисляемые ───────────────────────────────────────────────────
-
-  const hasGroups = computed(() => groupSet.value?.hasAny ?? false)
+  const hasGroups = computed(() => {
+    const g = groupSet.value
+    return g && (g.RO || g.RX || g.RW)
+  })
 
   const groupList = computed(() => {
     if (!groupSet.value) return []
-    const suffixLabel = { RO: 'Только чтение', RX: 'Чтение + выполнение', RW: 'Чтение и запись' }
-    const permIcon    = { RO: '👁', RX: '▶', RW: '✏️' }
+    const labels = { RO: 'Только чтение', RX: 'Чтение + выполнение', RW: 'Чтение и запись' }
+    const icons  = { RO: '👁', RX: '▶', RW: '✏️' }
     return ['RO', 'RX', 'RW']
       .map(s => groupSet.value[s])
       .filter(Boolean)
       .map(g => ({
         ...g,
-        label:       suffixLabel[g.suffix] ?? g.suffix,
-        icon:        permIcon[g.suffix]    ?? '🔒',
-        isExpanded:  expandedGroup.value === g.samAccountName,
-        members:     membersCache.value[g.samAccountName]?.members ?? [],
-        membersLoading: membersCache.value[g.samAccountName]?.loading ?? false,
+        label:          labels[g.suffix] ?? g.suffix,
+        icon:           icons[g.suffix]  ?? '🔒',
+        isExpanded:     expandedGroup.value === g.samAccountName,
+        members:        membersCache.value[g.samAccountName]?.members  ?? [],
+        membersLoading: membersCache.value[g.samAccountName]?.loading  ?? false,
       }))
   })
-
-  // ── Загрузка групп ────────────────────────────────────────────────
 
   async function loadGroups() {
     if (!folderPath.value) return
@@ -47,13 +44,11 @@ export function useAcl(folderPath) {
     try {
       groupSet.value = await getFolderGroups(folderPath.value)
     } catch (e) {
-      showError(t('ncaclmanager', 'Не удалось загрузить группы: ') + e.message)
+      showError('Не удалось загрузить группы: ' + e.message)
     } finally {
       loading.value = false
     }
   }
-
-  // ── Создание групп для папки ──────────────────────────────────────
 
   async function initGroups() {
     loading.value = true
@@ -61,39 +56,35 @@ export function useAcl(folderPath) {
       const result = await createFolderGroups(folderPath.value)
       if (result.success) {
         groupSet.value = result.groups
-        showSuccess(t('ncaclmanager', 'Группы успешно созданы'))
+        showSuccess('Группы успешно созданы')
       } else {
-        showError(result.errorMessage ?? t('ncaclmanager', 'Ошибка создания групп'))
+        showError(result.errorMessage ?? 'Ошибка создания групп')
       }
     } catch (e) {
-      showError(t('ncaclmanager', 'Ошибка: ') + e.message)
+      showError('Ошибка: ' + e.message)
     } finally {
       loading.value = false
     }
   }
-
-  // ── Удаление всех групп папки ─────────────────────────────────────
 
   async function removeAllGroups() {
     loading.value = true
     try {
       const result = await deleteFolderGroups(folderPath.value)
       if (result.success) {
-        groupSet.value    = null
+        groupSet.value      = null
         expandedGroup.value = null
         membersCache.value  = {}
-        showSuccess(t('ncaclmanager', 'Группы удалены'))
+        showSuccess('Группы удалены')
       } else {
-        showError(result.errorMessage ?? t('ncaclmanager', 'Ошибка удаления'))
+        showError(result.errorMessage ?? 'Ошибка удаления')
       }
     } catch (e) {
-      showError(t('ncaclmanager', 'Ошибка: ') + e.message)
+      showError('Ошибка: ' + e.message)
     } finally {
       loading.value = false
     }
   }
-
-  // ── Раскрытие группы / загрузка членов ───────────────────────────
 
   async function toggleGroup(groupName) {
     if (expandedGroup.value === groupName) {
@@ -105,48 +96,36 @@ export function useAcl(folderPath) {
   }
 
   async function loadMembers(groupName) {
-    if (membersCache.value[groupName]?.members?.length) return // уже загружены
-
+    if (membersCache.value[groupName]?.members?.length) return
     membersCache.value[groupName] = { members: [], loading: true }
     try {
       const result = await getGroupMembers(groupName)
       membersCache.value[groupName] = { members: result.members ?? [], loading: false }
     } catch (e) {
       membersCache.value[groupName] = { members: [], loading: false }
-      showError(t('ncaclmanager', 'Не удалось загрузить членов группы'))
+      showError('Не удалось загрузить членов группы')
     }
   }
 
-  // ── Добавление члена группы ───────────────────────────────────────
-
   async function addMember(groupName, user) {
-    // Предупреждение если пользователь уже имеет доступ через другую группу
-    const warning = checkDuplicateAccess(user.samAccountName)
-    if (warning) {
-      // Показываем предупреждение но не блокируем
-      showError(warning, { timeout: 5000 })
-    }
-
+    const warn = checkDuplicateAccess(user.samAccountName)
+    if (warn) showError(warn)
     try {
       const result = await addGroupMember(groupName, user.samAccountName)
       if (result.success) {
-        // Обновляем кэш
-        if (!membersCache.value[groupName]) {
+        if (!membersCache.value[groupName])
           membersCache.value[groupName] = { members: [], loading: false }
-        }
         membersCache.value[groupName].members.push(user)
         searchQuery.value   = ''
         searchResults.value = []
-        showSuccess(t('ncaclmanager', '{user} добавлен в группу', { user: user.displayName }))
+        showSuccess(user.displayName + ' добавлен в группу')
       } else {
-        showError(result.errorMessage ?? t('ncaclmanager', 'Ошибка добавления'))
+        showError(result.errorMessage ?? 'Ошибка добавления')
       }
     } catch (e) {
-      showError(t('ncaclmanager', 'Ошибка: ') + e.message)
+      showError('Ошибка: ' + e.message)
     }
   }
-
-  // ── Удаление члена группы ─────────────────────────────────────────
 
   async function removeMember(groupName, userSam) {
     try {
@@ -156,33 +135,26 @@ export function useAcl(folderPath) {
           membersCache.value[groupName].members =
             membersCache.value[groupName].members.filter(m => m.samAccountName !== userSam)
         }
-        showSuccess(t('ncaclmanager', 'Пользователь удалён из группы'))
+        showSuccess('Пользователь удалён из группы')
       } else {
-        showError(result.errorMessage ?? t('ncaclmanager', 'Ошибка удаления'))
+        showError(result.errorMessage ?? 'Ошибка удаления')
       }
     } catch (e) {
-      showError(t('ncaclmanager', 'Ошибка: ') + e.message)
+      showError('Ошибка: ' + e.message)
     }
   }
-
-  // ── Поиск пользователей (debounce 300ms) ──────────────────────────
 
   function onSearchInput(query) {
     searchQuery.value = query
     clearTimeout(searchTimer.value)
-
-    if (query.length < 3) {
-      searchResults.value = []
-      return
-    }
-
+    if (query.length < 3) { searchResults.value = []; return }
     searchTimer.value = setTimeout(() => doSearch(query), 300)
   }
 
   async function doSearch(query) {
     searchLoading.value = true
     try {
-      const result    = await searchUsers(query)
+      const result = await searchUsers(query)
       searchResults.value = result.users ?? []
     } catch (e) {
       searchResults.value = []
@@ -191,29 +163,20 @@ export function useAcl(folderPath) {
     }
   }
 
-  // ── Проверка дублирующего доступа ────────────────────────────────
-
   function checkDuplicateAccess(userSam) {
     for (const [gName, cache] of Object.entries(membersCache.value)) {
       if (cache.members?.some(m => m.samAccountName === userSam)) {
-        return t('ncaclmanager',
-          'Внимание: пользователь уже имеет доступ через группу {group}',
-          { group: gName })
+        return `Внимание: пользователь уже имеет доступ через группу ${gName}`
       }
     }
     return null
   }
 
   return {
-    // Состояние
     loading, groupSet, groupList, hasGroups,
     expandedGroup, membersCache,
     searchQuery, searchResults, searchLoading,
-
-    // Действия
     loadGroups, initGroups, removeAllGroups,
-    toggleGroup, addMember, removeMember,
-    onSearchInput,
-    checkDuplicateAccess,
+    toggleGroup, addMember, removeMember, onSearchInput,
   }
 }

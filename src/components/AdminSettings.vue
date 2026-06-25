@@ -1,450 +1,294 @@
 <template>
   <div class="acl-settings">
-    <h2>{{ t('ncaclmanager', 'ACL Manager — Настройки') }}</h2>
+    <h2>ACL Manager — Настройки</h2>
 
-    <NcNoteCard v-if="saveSuccess" type="success" class="acl-settings__note">
-      {{ t('ncaclmanager', 'Настройки сохранены') }}
-    </NcNoteCard>
+    <div v-if="saveSuccess" class="acl-settings__note acl-settings__note--success">
+      ✓ Настройки сохранены
+    </div>
+    <div v-if="saveError" class="acl-settings__note acl-settings__note--error">
+      ✗ {{ saveError }}
+    </div>
 
-    <!-- ── Секция: Агент ──────────────────────────────────────────── -->
+    <!-- Секция: Агент -->
     <section class="acl-settings__section">
-      <h3>{{ t('ncaclmanager', 'Подключение к агенту') }}</h3>
+      <h3>Подключение к агенту</h3>
+      <form autocomplete="off" @submit.prevent>
 
-      <NcTextField
-        :value="form.agentUrl"
-        :label="t('ncaclmanager', 'URL агента')"
-        :placeholder="'https://10.0.1.50:8443'"
-        :helper-text="t('ncaclmanager', 'HTTPS адрес Windows агента внутри сети')"
-        @update:value="form.agentUrl = $event" />
+      <label class="acl-settings__label">
+        URL агента
+        <input class="acl-settings__input" type="url" v-model="form.agentUrl"
+               placeholder="https://10.0.1.50:8443" />
+        <span class="acl-settings__hint">HTTPS адрес Windows агента внутри сети</span>
+      </label>
 
-      <NcTextField
-        :value="form.bearerToken"
-        :label="t('ncaclmanager', 'Bearer токен')"
-        :placeholder="bearerTokenPlaceholder"
-        :helper-text="t('ncaclmanager', 'Оставьте пустым чтобы не менять текущий токен')"
-        type="password"
-        autocomplete="new-password"
-        @update:value="form.bearerToken = $event" />
+      <label class="acl-settings__label">
+        Bearer токен
+        <input class="acl-settings__input" type="password" v-model="form.bearerToken"
+               autocomplete="new-password"
+               :placeholder="bearerPlaceholder" />
+        <span class="acl-settings__hint">Оставьте пустым чтобы не менять текущий токен</span>
+      </label>
 
-      <NcTextField
-        :value="form.clientCert"
-        :label="t('ncaclmanager', 'Путь к клиентскому сертификату (PFX)')"
-        :placeholder="'/etc/nextcloud/certs/ncaclagent-client.pfx'"
-        :helper-text="t('ncaclmanager', 'Абсолютный путь на NC сервере')"
-        @update:value="form.clientCert = $event" />
+      <label class="acl-settings__label">
+        Путь к клиентскому PFX сертификату
+        <input class="acl-settings__input" type="text" v-model="form.clientCert"
+               placeholder="/etc/nextcloud/certs/ncaclagent-client.pfx" />
+        <span class="acl-settings__hint">Абсолютный путь на NC сервере</span>
+      </label>
 
-      <NcTextField
-        :value="form.certPassword"
-        :label="t('ncaclmanager', 'Пароль сертификата')"
-        type="password"
-        autocomplete="new-password"
-        @update:value="form.certPassword = $event" />
+      <label class="acl-settings__label">
+        Пароль сертификата
+        <input class="acl-settings__input" type="password" v-model="form.certPassword"
+               autocomplete="new-password" />
+      </label>
 
-      <NcTextField
-        :value="String(form.timeout)"
-        :label="t('ncaclmanager', 'Таймаут соединения (сек)')"
-        type="number"
-        @update:value="form.timeout = Number($event)" />
+      <label class="acl-settings__label">
+        Таймаут (сек)
+        <input class="acl-settings__input acl-settings__input--short"
+               type="number" v-model.number="form.timeout" min="1" max="60" />
+      </label>
 
-      <!-- Тест связи с агентом -->
+      </form>
+      <!-- Тест соединения -->
       <div class="acl-settings__test">
-        <NcButton
-          type="secondary"
-          :loading="testLoading"
-          :disabled="!form.agentUrl"
-          @click="testConnection">
-          <template #icon><ConnectionIcon :size="18" /></template>
-          {{ t('ncaclmanager', 'Проверить соединение') }}
-        </NcButton>
+        <button class="button" :disabled="!form.agentUrl || testLoading" @click="testConnection">
+          <span v-if="testLoading" class="icon-loading-small"></span>
+          <span v-else class="icon-category-monitoring"></span>
+          Проверить соединение
+        </button>
 
-        <!-- Результат теста -->
         <Transition name="fade">
-          <div v-if="testResult !== null" class="acl-settings__test-result"
+          <div v-if="testResult !== null"
+               class="acl-settings__test-result"
                :class="testResult.success ? 'acl-settings__test-result--ok' : 'acl-settings__test-result--fail'">
-            <CheckCircleIcon v-if="testResult.success" :size="18" />
-            <AlertCircleIcon v-else                    :size="18" />
-            <div class="acl-settings__test-detail">
-              <span v-if="testResult.success">
-                {{ t('ncaclmanager', 'Агент доступен') }}
-                <span class="acl-settings__test-meta">
-                  · v{{ testResult.result?.version ?? '?' }}
-                  · {{ testResult.result?.timestamp ? formatTime(testResult.result.timestamp) : '' }}
-                </span>
+            <template v-if="testResult.success">
+              ✓ Агент доступен
+              <span class="acl-settings__test-meta">
+                · v{{ testResult.result?.version ?? '?' }}
+                · {{ testResult.result?.timestamp ? new Date(testResult.result.timestamp).toLocaleTimeString() : '' }}
               </span>
-              <span v-else>
-                {{ t('ncaclmanager', 'Не удалось подключиться') }}:
-                {{ testResult.error ?? testResult.result?.error }}
-              </span>
-            </div>
+            </template>
+            <template v-else>
+              ✗ Не удалось подключиться: {{ testResult.error ?? testResult.result?.error }}
+            </template>
           </div>
         </Transition>
       </div>
     </section>
 
-    <!-- ── Секция: Группы администраторов ────────────────────────── -->
+    <!-- Секция: Группы администраторов -->
     <section class="acl-settings__section">
-      <h3>{{ t('ncaclmanager', 'Группы администраторов ACL') }}</h3>
+      <h3>Группы администраторов ACL</h3>
       <p class="acl-settings__desc">
-        {{ t('ncaclmanager', 'Пользователи этих групп могут управлять правами на любые папки. Можно добавить несколько групп.') }}
+        Пользователи этих групп могут управлять правами на любые папки. Можно добавить несколько групп.
       </p>
 
-      <!-- Список добавленных групп -->
+      <div v-if="form.adminGroups.length === 0" class="acl-settings__groups-empty">
+        ⚠ Не добавлено ни одной группы — управление правами недоступно!
+      </div>
+
       <div class="acl-settings__groups">
-        <div v-for="(group, idx) in form.adminGroups"
-             :key="idx"
-             class="acl-settings__group-row">
-          <AccountGroupIcon :size="18" class="acl-settings__group-icon" />
+        <div v-for="(group, idx) in form.adminGroups" :key="idx" class="acl-settings__group-row">
+          <span class="icon-group"></span>
           <span class="acl-settings__group-name">{{ group }}</span>
-          <NcButton type="tertiary-no-background"
-                    :aria-label="t('ncaclmanager', 'Удалить группу')"
-                    @click="removeAdminGroup(idx)">
-            <template #icon><CloseIcon :size="16" /></template>
-          </NcButton>
-        </div>
-
-        <div v-if="form.adminGroups.length === 0" class="acl-settings__groups-empty">
-          {{ t('ncaclmanager', 'Не добавлено ни одной группы — управление правами недоступно!') }}
+          <button class="button" @click="removeAdminGroup(idx)">
+            <span class="icon-close"></span>
+          </button>
         </div>
       </div>
 
-      <!-- Добавление новой группы -->
       <div class="acl-settings__add-group">
-        <NcTextField
-          :value="newGroup"
-          :label="t('ncaclmanager', 'Добавить группу')"
-          :placeholder="'COMPANY\\IT-Admins'"
-          :helper-text="t('ncaclmanager', 'Формат: DOMAIN\\GroupName или sAMAccountName')"
-          @update:value="newGroup = $event"
-          @keydown.enter="addAdminGroup" />
-        <NcButton type="secondary"
-                  :disabled="!newGroup.trim()"
-                  @click="addAdminGroup">
-          <template #icon><PlusIcon :size="16" /></template>
-          {{ t('ncaclmanager', 'Добавить') }}
-        </NcButton>
+        <input class="acl-settings__input" type="text" v-model="newGroup"
+               placeholder="COMPANY\IT-Admins"
+               @keydown.enter="addAdminGroup" />
+        <button class="button" :disabled="!newGroup.trim()" @click="addAdminGroup">
+          Добавить
+        </button>
       </div>
     </section>
 
-    <!-- ── Секция: Делегирование ─────────────────────────────────── -->
+    <!-- Секция: Делегирование -->
     <section class="acl-settings__section">
-      <h3>{{ t('ncaclmanager', 'Делегирование через руководителей') }}</h3>
+      <h3>Делегирование через руководителей</h3>
       <p class="acl-settings__desc">
-        {{ t('ncaclmanager', 'Если включено — руководитель может добавлять своих подчинённых в группы доступа (проверяется цепочка manager в AD).') }}
+        Если включено — руководитель может добавлять своих подчинённых в группы доступа.
       </p>
 
-      <NcCheckboxRadioSwitch
-        :checked="form.ownerModeEnabled"
-        @update:checked="form.ownerModeEnabled = $event">
-        {{ t('ncaclmanager', 'Разрешить owner группы управлять составом своих групп') }}
-      </NcCheckboxRadioSwitch>
+      <label class="acl-settings__checkbox">
+        <input type="checkbox" v-model="form.ownerModeEnabled" />
+        Разрешить owner группы управлять составом своих групп
+      </label>
 
-      <NcNoteCard v-if="form.ownerModeEnabled" type="info" class="acl-settings__note">
-        {{ t('ncaclmanager', 'Глубина проверки цепочки руководителей настраивается в конфиге агента (AdManagerDelegation.MaxDepth)') }}
-      </NcNoteCard>
+      <div v-if="form.ownerModeEnabled" class="acl-settings__note acl-settings__note--info">
+        Глубина проверки цепочки руководителей настраивается в конфиге агента
+        (AdManagerDelegation.MaxDepth)
+      </div>
     </section>
 
-    <!-- ── Кнопки действий ───────────────────────────────────────── -->
+    <!-- Действия -->
     <div class="acl-settings__actions">
-      <NcButton type="primary"
-                :loading="saving"
-                @click="save">
-        <template #icon><ContentSaveIcon :size="18" /></template>
-        {{ t('ncaclmanager', 'Сохранить настройки') }}
-      </NcButton>
-
-      <NcButton type="tertiary"
-                :loading="loading"
-                @click="load">
-        <template #icon><RefreshIcon :size="18" /></template>
-        {{ t('ncaclmanager', 'Сбросить изменения') }}
-      </NcButton>
+      <button class="button primary" :disabled="saving" @click="save">
+        <span v-if="saving" class="icon-loading-small"></span>
+        Сохранить настройки
+      </button>
+      <button class="button" :disabled="loading" @click="load">
+        Сбросить изменения
+      </button>
     </div>
   </div>
 </template>
 
-<script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
-import { translate as t } from '@nextcloud/l10n'
-import axios from '@nextcloud/axios'
-import { generateUrl } from '@nextcloud/router'
-import { showError } from '@nextcloud/dialogs'
+<script>
+import { getSettings, saveSettings, testAgent } from '../api/agent.js'
+import { showError } from '../api/nc.js'
 
-import NcButton              from '@nextcloud/vue/dist/Components/NcButton.js'
-import NcTextField           from '@nextcloud/vue/dist/Components/NcTextField.js'
-import NcCheckboxRadioSwitch from '@nextcloud/vue/dist/Components/NcCheckboxRadioSwitch.js'
-import NcNoteCard            from '@nextcloud/vue/dist/Components/NcNoteCard.js'
-
-import ConnectionIcon   from 'vue-material-design-icons/AccessPoint.vue'
-import CheckCircleIcon  from 'vue-material-design-icons/CheckCircle.vue'
-import AlertCircleIcon  from 'vue-material-design-icons/AlertCircle.vue'
-import AccountGroupIcon from 'vue-material-design-icons/AccountGroup.vue'
-import CloseIcon        from 'vue-material-design-icons/Close.vue'
-import PlusIcon         from 'vue-material-design-icons/Plus.vue'
-import ContentSaveIcon  from 'vue-material-design-icons/ContentSave.vue'
-import RefreshIcon      from 'vue-material-design-icons/Refresh.vue'
-
-const api = (path) => generateUrl(`/apps/ncaclmanager/api${path}`)
-
-// ── Состояние ─────────────────────────────────────────────────────────
-const loading     = ref(false)
-const saving      = ref(false)
-const saveSuccess = ref(false)
-const testLoading = ref(false)
-const testResult  = ref(null)
-const newGroup    = ref('')
-
-const form = reactive({
-  agentUrl:         '',
-  bearerToken:      '',
-  clientCert:       '',
-  certPassword:     '',
-  timeout:          10,
-  adminGroups:      [],
-  ownerModeEnabled: false,
-})
-
-const bearerTokenPlaceholder = computed(() =>
-  form.bearerToken
-    ? t('ncaclmanager', 'Токен задан — оставьте пустым для сохранения текущего')
-    : t('ncaclmanager', 'Введите Bearer токен (минимум 32 символа)')
-)
-
-// ── Загрузка настроек ─────────────────────────────────────────────────
-async function load() {
-  loading.value = true
-  try {
-    const res = await axios.get(api('/settings'))
-    const d   = res.data
-    form.agentUrl         = d.agent_url         ?? ''
-    form.bearerToken      = ''                        // токен не возвращаем
-    form.clientCert       = d.client_cert        ?? ''
-    form.certPassword     = ''                        // пароль не возвращаем
-    form.timeout          = d.timeout            ?? 10
-    form.adminGroups      = d.admin_groups       ?? []
-    form.ownerModeEnabled = d.owner_mode_enabled ?? false
-    testResult.value      = null
-  } catch (e) {
-    showError(t('ncaclmanager', 'Не удалось загрузить настройки: ') + e.message)
-  } finally {
-    loading.value = false
-  }
+export default {
+  name: 'AdminSettings',
+  data() {
+    return {
+      loading:      false,
+      saving:       false,
+      saveSuccess:  false,
+      saveError:    null,
+      testLoading:  false,
+      testResult:   null,
+      newGroup:     '',
+      form: {
+        agentUrl:         '',
+        bearerToken:      '',
+        clientCert:       '',
+        certPassword:     '',
+        timeout:          10,
+        adminGroups:      [],
+        ownerModeEnabled: false,
+      },
+    }
+  },
+  computed: {
+    bearerPlaceholder() {
+      return this.form.bearerToken
+        ? 'Токен задан — оставьте пустым для сохранения текущего'
+        : 'Введите Bearer токен (минимум 32 символа)'
+    },
+  },
+  mounted() { this.load() },
+  methods: {
+    async load() {
+      this.loading = true
+      try {
+        const d = await getSettings()
+        this.form.agentUrl         = d.agent_url         ?? ''
+        this.form.bearerToken      = ''
+        this.form.clientCert       = d.client_cert        ?? ''
+        this.form.certPassword     = ''
+        this.form.timeout          = d.timeout            ?? 10
+        this.form.adminGroups      = d.admin_groups       ?? []
+        this.form.ownerModeEnabled = d.owner_mode_enabled ?? false
+        this.testResult            = null
+      } catch (e) {
+        showError('Не удалось загрузить настройки: ' + e.message)
+      } finally {
+        this.loading = false
+      }
+    },
+    async save() {
+      this.saving     = true
+      this.saveSuccess = false
+      this.saveError   = null
+      try {
+        await saveSettings({
+          agent_url:          this.form.agentUrl,
+          bearer_token:       this.form.bearerToken,
+          client_cert:        this.form.clientCert,
+          cert_password:      this.form.certPassword,
+          timeout:            this.form.timeout,
+          admin_groups:       this.form.adminGroups,
+          owner_mode_enabled: this.form.ownerModeEnabled ? 'true' : 'false',
+        })
+        this.saveSuccess = true
+        setTimeout(() => { this.saveSuccess = false }, 4000)
+      } catch (e) {
+        this.saveError = e.message
+      } finally {
+        this.saving = false
+      }
+    },
+    async testConnection() {
+      this.testLoading = true
+      this.testResult  = null
+      try {
+        this.testResult = await testAgent()
+      } catch (e) {
+        this.testResult = { success: false, error: e.message }
+      } finally {
+        this.testLoading = false
+      }
+    },
+    addAdminGroup() {
+      const g = this.newGroup.trim()
+      if (!g || this.form.adminGroups.includes(g)) return
+      this.form.adminGroups.push(g)
+      this.newGroup = ''
+    },
+    removeAdminGroup(idx) {
+      this.form.adminGroups.splice(idx, 1)
+    },
+  },
 }
-
-// ── Сохранение ────────────────────────────────────────────────────────
-async function save() {
-  saving.value      = true
-  saveSuccess.value = false
-  try {
-    await axios.post(api('/settings'), {
-      agent_url:          form.agentUrl,
-      bearer_token:       form.bearerToken,   // пустой = не перезаписываем
-      client_cert:        form.clientCert,
-      cert_password:      form.certPassword,
-      timeout:            form.timeout,
-      admin_groups:       form.adminGroups,
-      owner_mode_enabled: form.ownerModeEnabled ? 'true' : 'false',
-    })
-    saveSuccess.value = true
-    setTimeout(() => { saveSuccess.value = false }, 4000)
-  } catch (e) {
-    showError(t('ncaclmanager', 'Ошибка сохранения: ') + e.message)
-  } finally {
-    saving.value = false
-  }
-}
-
-// ── Тест соединения ───────────────────────────────────────────────────
-async function testConnection() {
-  testLoading.value = true
-  testResult.value  = null
-  try {
-    const res        = await axios.post(api('/settings/test-agent'))
-    testResult.value = res.data
-  } catch (e) {
-    testResult.value = { success: false, error: e.message }
-  } finally {
-    testLoading.value = false
-  }
-}
-
-// ── Управление группами администраторов ───────────────────────────────
-function addAdminGroup() {
-  const g = newGroup.value.trim()
-  if (!g) return
-  if (form.adminGroups.includes(g)) {
-    showError(t('ncaclmanager', 'Группа уже добавлена'))
-    return
-  }
-  form.adminGroups.push(g)
-  newGroup.value = ''
-}
-
-function removeAdminGroup(idx) {
-  form.adminGroups.splice(idx, 1)
-}
-
-// ── Утилиты ───────────────────────────────────────────────────────────
-function formatTime(iso) {
-  try {
-    return new Date(iso).toLocaleTimeString()
-  } catch {
-    return iso
-  }
-}
-
-onMounted(() => load())
 </script>
 
 <style scoped>
-.acl-settings {
-  max-width: 700px;
-  padding: 24px;
-}
-
-.acl-settings h2 {
-  font-size: 20px;
-  font-weight: 700;
-  margin-bottom: 24px;
-  color: var(--color-main-text);
-}
+.acl-settings { max-width: 700px; padding: 24px; }
+.acl-settings h2 { font-size: 20px; font-weight: 700; margin-bottom: 24px; }
 
 .acl-settings__section {
-  background: var(--color-main-background);
   border: 1px solid var(--color-border);
-  border-radius: 12px;
+  border-radius: var(--border-radius-large);
   padding: 20px 24px;
   margin-bottom: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  display: flex; flex-direction: column; gap: 14px;
 }
+.acl-settings__section h3 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+.acl-settings__desc { font-size: 13px; color: var(--color-text-maxcontrast); margin: 0; }
 
-.acl-settings__section h3 {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--color-main-text);
-  margin: 0 0 4px;
-}
+.acl-settings__label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 500; }
+.acl-settings__input { width: 100%; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: var(--border-radius); background: var(--color-main-background); color: var(--color-main-text); font-size: 13px; box-sizing: border-box; }
+.acl-settings__input--short { width: 100px; }
+.acl-settings__input:focus { outline: 2px solid var(--color-primary); border-color: transparent; }
+.acl-settings__hint { font-size: 11px; color: var(--color-text-maxcontrast); }
 
-.acl-settings__desc {
-  font-size: 13px;
-  color: var(--color-text-maxcontrast);
-  margin: 0;
-  line-height: 1.5;
-}
+.acl-settings__test { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.acl-settings__test-result { padding: 8px 14px; border-radius: var(--border-radius); font-size: 13px; font-weight: 500; }
+.acl-settings__test-result--ok   { background: rgba(0,130,0,.1); color: var(--color-success, green); }
+.acl-settings__test-result--fail { background: rgba(200,0,0,.1); color: var(--color-error, red); }
+.acl-settings__test-meta { font-weight: 400; opacity: .75; margin-left: 4px; }
 
-/* ── Тест соединения ────────────────────────────────────────────────── */
-
-.acl-settings__test {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.acl-settings__test-result {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.acl-settings__test-result--ok {
-  background: rgba(var(--color-success-rgb, 0,130,0), 0.12);
-  color: var(--color-success, #008000);
-}
-
-.acl-settings__test-result--fail {
-  background: rgba(var(--color-error-rgb, 200,0,0), 0.12);
-  color: var(--color-error, #c00000);
-}
-
-.acl-settings__test-meta {
-  font-weight: 400;
-  opacity: 0.75;
-  margin-left: 4px;
-}
-
-.acl-settings__test-detail {
-  display: flex;
-  flex-direction: column;
-}
-
-/* ── Группы ─────────────────────────────────────────────────────────── */
-
-.acl-settings__groups {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
+.acl-settings__groups { display: flex; flex-direction: column; gap: 6px; }
 .acl-settings__group-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--color-background-hover);
-  border-radius: 8px;
-  border: 1px solid var(--color-border);
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; background: var(--color-background-hover);
+  border-radius: var(--border-radius); border: 1px solid var(--color-border);
 }
-
-.acl-settings__group-icon {
-  color: var(--color-primary);
-  flex-shrink: 0;
-}
-
-.acl-settings__group-name {
-  flex: 1;
-  font-size: 13px;
-  font-family: monospace;
-  color: var(--color-main-text);
-}
-
+.acl-settings__group-name { flex: 1; font-family: monospace; font-size: 13px; }
 .acl-settings__groups-empty {
-  padding: 12px;
-  text-align: center;
-  font-size: 13px;
-  color: var(--color-error);
-  background: rgba(var(--color-error-rgb, 200,0,0), 0.08);
-  border-radius: 8px;
-  border: 1px dashed var(--color-error);
+  padding: 10px; text-align: center; font-size: 13px;
+  color: var(--color-warning, orange);
+  border: 1px dashed var(--color-warning, orange);
+  border-radius: var(--border-radius);
 }
 
-.acl-settings__add-group {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-}
+.acl-settings__add-group { display: flex; gap: 8px; align-items: center; }
+.acl-settings__add-group .acl-settings__input { flex: 1; }
 
-.acl-settings__add-group > :first-child {
-  flex: 1;
-}
+.acl-settings__checkbox { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
 
-/* ── Кнопки ─────────────────────────────────────────────────────────── */
+.acl-settings__note { padding: 10px 14px; border-radius: var(--border-radius); font-size: 13px; }
+.acl-settings__note--success { background: rgba(0,130,0,.1); color: var(--color-success, green); }
+.acl-settings__note--error   { background: rgba(200,0,0,.1); color: var(--color-error, red); }
+.acl-settings__note--info    { background: rgba(0,100,200,.1); color: var(--color-info, #0064c8); }
 
-.acl-settings__actions {
-  display: flex;
-  gap: 12px;
-  margin-top: 8px;
-}
+.acl-settings__actions { display: flex; gap: 12px; margin-top: 8px; }
 
-.acl-settings__note {
-  margin: 0;
-}
-
-/* ── Анимации ───────────────────────────────────────────────────────── */
-
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.25s, transform 0.25s;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
-}
+.fade-enter-active, .fade-leave-active { transition: opacity .25s, transform .25s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; transform: translateY(-4px); }
 </style>

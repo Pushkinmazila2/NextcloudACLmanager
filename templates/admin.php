@@ -3,4 +3,4 @@
 script('ncaclmanager', 'ncaclmanager-settings');
 style('ncaclmanager', 'ncaclmanager');
 ?>
-<div id="ncaclmanager-settings-root"></div>
+<div id="ncaclmanager-settings-root" class="section"></div>

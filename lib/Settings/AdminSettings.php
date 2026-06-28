@@ -6,19 +6,21 @@ namespace OCA\NcAclManager\Settings;
 
 use OCA\NcAclManager\AppInfo\Application;
 use OCP\AppFramework\Http\TemplateResponse;
-use OCP\IConfig;
 use OCP\IL10N;
 use OCP\Settings\ISettings;
+use OCP\Util;
 
 class AdminSettings implements ISettings
 {
     public function __construct(
-        private readonly IConfig $config,
-        private readonly IL10N   $l,
+        private readonly IL10N $l,
     ) {}
 
     public function getForm(): TemplateResponse
     {
+        Util::addScript(Application::APP_ID, 'ncaclmanager-settings');
+        Util::addStyle(Application::APP_ID, 'ncaclmanager');
+
         return new TemplateResponse(Application::APP_ID, 'admin', []);
     }
 

@@ -1,8 +1,8 @@
-import { createApp, h } from 'vue'
+import { defineComponent, h } from 'vue'
 import AclPanel from './components/AclPanel.vue'
 import { generateUrl, axios } from './api/nc.js'
 
-// ── Состояние пользователя ────────────────────────────────────────────
+// ── Состояние ─────────────────────────────────────────────────────────
 let isAdmin   = false
 let ownerMode = false
 
@@ -11,195 +11,168 @@ async function fetchUserRole() {
     const res = await axios.get(generateUrl('/apps/ncaclmanager/api/settings'))
     isAdmin   = res.data?.is_admin          ?? false
     ownerMode = res.data?.owner_mode_enabled ?? false
+    console.info('[NcAclManager] Роль: isAdmin=' + isAdmin)
   } catch (e) {
     console.warn('[NcAclManager] fetchUserRole:', e.message)
   }
 }
 
-// ── Маппинг NC пути → UNC путь ────────────────────────────────────────
-// NC хранит внешние хранилища как /mountpoint/...
-// Агент ожидает \\SERVER\Share\...
-// Маппинги хранятся в window._ncAclMounts (заполняется из PHP через data-атрибут или API)
-function resolveUncPath(ncPath) {
-  const mounts = window._ncAclMounts || []
-  for (const m of mounts) {
-    if (ncPath.startsWith(m.ncPath)) {
-      const relative = ncPath.slice(m.ncPath.length)
-      return m.uncPath.replace(/\/$/, '') + relative.replace(/\//g, '\\')
-    }
-  }
-  // Нет маппинга — возвращаем как есть (для локальных папок)
-  return ncPath
-}
-
-// ── Монтирование Vue панели ───────────────────────────────────────────
-function mountPanel(el, ncPath) {
-  if (el._aclApp) {
-    try { el._aclApp.unmount() } catch (_) {}
-    el._aclApp = null
-  }
-  const uncPath = resolveUncPath(ncPath)
-  const app = createApp({
-    render: () => h(AclPanel, {
-      folderPath: uncPath,
-      ncPath,
-      isAdmin,
-    }),
-  })
-  app.mount(el)
-  el._aclApp = app
-}
-
-function unmountPanel(el) {
-  if (el._aclApp) {
-    try { el._aclApp.unmount() } catch (_) {}
-    el._aclApp = null
-  }
-}
-
-function getNodePath(node) {
-  // NC 34 Files API — node это FileInfo объект
-  if (!node) return ''
-  // Новый API (NC 29+): node.path
-  if (typeof node.path === 'string') return node.path
-  // Старый API: node.get('path') + '/' + node.get('name')
-  if (typeof node.get === 'function') {
-    const path = node.get('path') || '/'
-    const name = node.get('name') || ''
-    return path.replace(/\/$/, '') + '/' + name
-  }
-  return ''
-}
-
-// ── Инициализация ─────────────────────────────────────────────────────
-async function init() {
-  await fetchUserRole()
-  const canManage = isAdmin || ownerMode
-
-  // Загружаем маппинги внешних хранилищ
+async function loadMounts() {
   try {
     const res = await axios.get(generateUrl('/apps/ncaclmanager/api/mounts'))
     window._ncAclMounts = res.data?.mounts ?? []
-    console.info('[NcAclManager] Маппинги загружены:', window._ncAclMounts)
+    console.info('[NcAclManager] Маппинги загружены:', window._ncAclMounts.length)
   } catch (e) {
-    console.warn('[NcAclManager] Не удалось загрузить маппинги:', e.message)
     window._ncAclMounts = []
   }
+}
 
-  // ── NC 29-34: registerFileAction ──────────────────────────────────
-  // Это основной способ добавить действие в контекстное меню в NC 29+
-  if (canManage && window.OCA?.Files?.registerFileAction) {
+function resolveUncPath(ncPath) {
+  const mounts = window._ncAclMounts || []
+  // Сортируем по длине — более специфичные маппинги первыми
+  const sorted = [...mounts].sort((a, b) => b.ncPath.length - a.ncPath.length)
+  for (const m of sorted) {
+    const ncRoot = m.ncPath.replace(/\/$/, '')
+    if (ncPath === ncRoot || ncPath.startsWith(ncRoot + '/')) {
+      const rel = ncPath.slice(ncRoot.length).replace(/\//g, '\\')
+      return m.uncPath.replace(/[\\]+$/, '') + rel
+    }
+  }
+  return ncPath
+}
+
+// ── Vue компонент для Sidebar ─────────────────────────────────────────
+const AclSidebarTab = defineComponent({
+  name: 'AclSidebarTab',
+  props: {
+    node:     { type: Object, default: null },
+    fileInfo: { type: Object, default: null },
+  },
+  setup(props) {
+    return () => {
+      const info = props.node || props.fileInfo
+      if (!info) return h('div', { style: 'padding:16px;color:var(--color-text-maxcontrast)' }, 'Выберите папку')
+
+      let ncPath = ''
+      if (typeof info.path === 'string') {
+        ncPath = info.path
+      } else if (typeof info.get === 'function') {
+        const p = info.get('path') || '/'
+        const n = info.get('name') || ''
+        ncPath  = p.replace(/\/$/, '') + '/' + n
+      } else if (info.attributes?.filename) {
+        ncPath = info.attributes.filename.replace(/^\/files\/[^/]+/, '')
+      }
+
+      const uncPath = resolveUncPath(ncPath)
+      console.debug('[NcAclManager] sidebar render: ncPath=' + ncPath + ' → uncPath=' + uncPath)
+
+      return h(AclPanel, { folderPath: uncPath, ncPath, isAdmin })
+    }
+  },
+})
+
+// ── Регистрация ───────────────────────────────────────────────────────
+function register() {
+  const canManage = isAdmin || ownerMode
+
+  console.info('[NcAclManager] register(): canManage=' + canManage
+    + ' Sidebar=' + !!window.OCA?.Files?.Sidebar
+    + ' registerFileAction=' + !!window.OCA?.Files?.registerFileAction)
+
+  // ── registerFileAction (NC 25+) ─────────────────────────────────────
+  if (window.OCA?.Files?.registerFileAction) {
     window.OCA.Files.registerFileAction({
-      id:          'acl-manager',
-      displayName: () => 'ACL / Права доступа',
-      iconSvgInline: () => `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-        <path fill="currentColor" d="M12 1C9.24 1 7 3.24 7 6v1H6c-1.1 0-2 .9-2
-          2v11c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V9c0-1.1-.9-2-2-2h-1V6c0-2.76-2.24-5-5-5zm0
-          2c1.66 0 3 1.34 3 3v1H9V6c0-1.66 1.34-3 3-3zm0 9c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2
-          .9-2 2-2z"/>
-      </svg>`,
-      enabled: (nodes) => {
-        if (!canManage || !nodes?.length) return false
-        return nodes[0].type === 'folder' || nodes[0].type === 'dir'
-      },
+      id:            'acl-manager',
+      displayName:   () => 'ACL / Права доступа',
+      iconSvgInline: () => `<svg viewBox="0 0 24 24"><path fill="currentColor"
+        d="M12 1C9.24 1 7 3.24 7 6v1H6c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h12
+        c1.1 0 2-.9 2-2V9c0-1.1-.9-2-2-2h-1V6c0-2.76-2.24-5-5-5zm0 2c1.66 0 3
+        1.34 3 3v1H9V6c0-1.66 1.34-3 3-3zm0 9c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2
+        .9-2 2-2z"/></svg>`,
+      enabled: (nodes) => canManage
+        && nodes?.length === 1
+        && (nodes[0].type === 'folder' || nodes[0].type === 'dir'),
       async exec(node) {
-        // Открываем sidebar и переходим на вкладку ACL
-        if (window.OCA?.Files?.Sidebar) {
-          const path = getNodePath(node)
-          window.OCA.Files.Sidebar.open(path)
-          // В NC 34 setActiveTab может называться иначе
-          setTimeout(() => {
-            const sb = window.OCA.Files.Sidebar
-            if (typeof sb.setActiveTab === 'function') sb.setActiveTab('acl')
-            else if (typeof sb.open === 'function') sb.open(path)
-          }, 200)
+        const sidebar = window.OCA?.Files?.Sidebar
+        if (sidebar) {
+          sidebar.open(node.path || '')
+          setTimeout(() => sidebar.setActiveTab?.('acl'), 300)
         }
         return null
       },
       order: 50,
     })
-    console.info('[NcAclManager] registerFileAction зарегистрирован')
+    console.info('[NcAclManager] ✓ registerFileAction')
   }
 
-  // ── NC 34 Sidebar Tab ─────────────────────────────────────────────
-  // В NC 29+ registerTab принимает экземпляр Tab класса
-  const Sidebar = window.OCA?.Files?.Sidebar
-
-  if (Sidebar) {
-    // Способ 1: NC 29-34 — new Sidebar.Tab(...)
-    if (typeof Sidebar.Tab === 'function') {
-      const tab = new Sidebar.Tab({
-        id:   'acl',
-        name: 'ACL',
-        icon: 'icon-lock',
-        component: {
-          // Vue компонент передаётся напрямую
-          render() {
-            return h('div', { id: 'acl-tab-inner' })
-          },
-          mounted() {
-            // монтируем AclPanel в наш div
-          },
-        },
-      })
-      Sidebar.registerTab(tab)
-      console.info('[NcAclManager] Sidebar.Tab зарегистрирован (NC 29+ API)')
-    }
-    // Способ 2: NC 28 — объект с методами
-    else if (typeof Sidebar.registerTab === 'function') {
-      Sidebar.registerTab({
-        id:    'acl',
-        name:  'ACL',
-        icon:  'icon-lock',
-        order: 10,
-
-        enabled(fileInfo) {
-          if (!canManage) return false
-          const type = fileInfo?.type ?? fileInfo?.get?.('type')
-          return type === 'dir' || type === 'folder'
-        },
-        mount(el, fileInfo) {
-          const path = getNodePath(fileInfo)
-          mountPanel(el, path)
-        },
-        update(el, fileInfo) {
-          const path = getNodePath(fileInfo)
-          mountPanel(el, path)
-        },
-        unmount(el) {
-          unmountPanel(el)
-        },
-      })
-      console.info('[NcAclManager] Sidebar.registerTab зарегистрирован (NC 28 API)')
-    } else {
-      console.warn('[NcAclManager] Sidebar API не найден')
-    }
-  }
-
-  // ── NC 28 legacy fileActions ──────────────────────────────────────
-  if (canManage
-    && window.OCA?.Files?.fileActions
-    && typeof window.OCA.Files.fileActions.registerAction === 'function') {
-
-    window.OCA.Files.fileActions.registerAction({
-      name:        'acl-manager',
-      displayName: 'ACL / Права доступа',
-      iconClass:   'icon-lock',
-      permissions: window.OC?.PERMISSION_READ ?? 1,
-      type:        window.OCA.Files.FileActions?.TYPE_DROPDOWN,
-      mime:        'dir',
-      order:       50,
-      actionHandler(filename, ctx) {
-        const dir  = ctx?.$file?.data('path') ?? ctx?.dir ?? '/'
-        const path = dir.replace(/\/$/, '') + '/' + filename
-        if (Sidebar) {
-          Sidebar.open(path)
-          setTimeout(() => Sidebar.setActiveTab?.('acl'), 200)
-        }
+  // ── Sidebar.registerTab ─────────────────────────────────────────────
+  const sidebar = window.OCA?.Files?.Sidebar
+  if (sidebar?.registerTab) {
+    sidebar.registerTab({
+      id:        'acl',
+      name:      'ACL',
+      icon:      'icon-lock',
+      order:     10,
+      enabled:   (node) => {
+        if (!canManage) return false
+        const type = node?.type ?? node?.get?.('type')
+          ?? (node?.attributes?.resourcetype?.collection !== undefined ? 'dir' : null)
+        return type === 'dir' || type === 'folder' || type === 'directory'
       },
+      component: AclSidebarTab,
     })
-    console.info('[NcAclManager] fileActions.registerAction зарегистрирован (legacy)')
+    console.info('[NcAclManager] ✓ Sidebar.registerTab')
   }
+}
+
+// ── Ждём готовности NC Files ──────────────────────────────────────────
+async function init() {
+  await Promise.all([fetchUserRole(), loadMounts()])
+
+  // Если OCA.Files уже готов — регистрируем сразу
+  if (window.OCA?.Files?.Sidebar || window.OCA?.Files?.registerFileAction) {
+    register()
+    return
+  }
+
+  console.info('[NcAclManager] OCA.Files не готов — ждём события...')
+
+  // NC 34 генерирует событие когда Files app инициализирован
+  // Слушаем несколько вариантов имён событий
+  const events = [
+    'OCA.Files.App.init',          // старый NC
+    'nextcloud:files:init',        // NC 28+
+    'files:navigation:changed',    // NC 29+
+  ]
+
+  let registered = false
+
+  function onFilesReady() {
+    if (registered) return
+    registered = true
+    console.info('[NcAclManager] Files app готов (событие)')
+    register()
+  }
+
+  events.forEach(ev => window.addEventListener(ev, onFilesReady, { once: true }))
+
+  // Fallback: polling каждые 200ms до 10 секунд
+  let attempts = 0
+  const poll = setInterval(() => {
+    attempts++
+    if (window.OCA?.Files?.Sidebar || window.OCA?.Files?.registerFileAction) {
+      clearInterval(poll)
+      if (!registered) {
+        registered = true
+        console.info('[NcAclManager] Files app готов (polling, попытка ' + attempts + ')')
+        register()
+      }
+    } else if (attempts >= 50) {
+      clearInterval(poll)
+      console.warn('[NcAclManager] Timeout: OCA.Files так и не появился за 10 секунд')
+    }
+  }, 200)
 }
 
 if (document.readyState === 'loading') {

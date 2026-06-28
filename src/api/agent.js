@@ -49,5 +49,10 @@ export const getSettings = () =>
 export const saveSettings = (data) =>
   axios.post(base('/settings'), data).then(r => r.data)
 
-export const testAgent = () =>
-  axios.post(base('/settings/test-agent')).then(r => r.data)
+/**
+ * Тест соединения — передаём текущие значения формы напрямую.
+ * Сервер использует их вместо сохранённых в БД.
+ * Пустые секреты (токен/пароль) = сервер возьмёт из БД сам.
+ */
+export const testAgent = (formData) =>
+  axios.post(base('/settings/test-agent'), formData).then(r => r.data)

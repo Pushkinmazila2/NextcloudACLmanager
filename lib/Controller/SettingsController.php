@@ -2,331 +2,233 @@
 
 declare(strict_types=1);
 
-namespace OCA\NcAclManager\Service;
+namespace OCA\NcAclManager\Controller;
 
 use OCA\NcAclManager\AppInfo\Application;
-use OCP\Http\Client\IClientService;
+use OCA\NcAclManager\Service\AgentService;
+use OCA\NcAclManager\Service\AuthorizationService;
+use OCP\AppFramework\Controller;
+use OCP\AppFramework\Http\Attribute\NoAdminRequired;
+use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
+use OCP\AppFramework\Http;
+use OCP\AppFramework\Http\JSONResponse;
 use OCP\IConfig;
+use OCP\IGroupManager;
+use OCP\IRequest;
+use OCP\IUserManager;
+use OCP\IUserSession;
 use Psr\Log\LoggerInterface;
 
-class AgentService
+class SettingsController extends Controller
 {
-    private string  $agentUrl;
-    private string  $bearerToken;
-    private string  $certPath;
-    private string  $certPassword;
-    private int     $timeout;
-
-    private ?string $currentUserUid    = null;
-    private ?string $currentUserGroups = null;
+    private const ALLOWED_KEYS = [
+        'agent_url', 'bearer_token', 'client_cert', 'cert_password',
+        'admin_groups', 'nc_admin_users', 'owner_mode_enabled', 'timeout', 'verify_ssl',
+    ];
 
     public function __construct(
-        private readonly IClientService  $httpClientService,
-        private readonly IConfig         $config,
-        private readonly LoggerInterface $logger,
+        string                              $appName,
+        IRequest                            $request,
+        private readonly IConfig            $config,
+        private readonly AgentService       $agentService,
+        private readonly AuthorizationService $authService,
+        private readonly IUserSession       $userSession,
+        private readonly IUserManager       $userManager,
+        private readonly IGroupManager      $groupManager,
+        private readonly LoggerInterface    $logger,
     ) {
-        $this->agentUrl     = $config->getAppValue(Application::APP_ID, 'agent_url',      '');
-        $this->bearerToken  = $config->getAppValue(Application::APP_ID, 'bearer_token',   '');
-        $this->certPath     = $config->getAppValue(Application::APP_ID, 'client_cert',    '');
-        $this->certPassword = $config->getAppValue(Application::APP_ID, 'cert_password',  '');
-        $this->timeout      = (int)$config->getAppValue(Application::APP_ID, 'timeout',   '10');
+        parent::__construct($appName, $request);
     }
 
-    public function setContext(\OCP\IUser $user, string $groupsHeader): void
+    #[NoAdminRequired]
+    public function getSettings(): JSONResponse
     {
-        $this->currentUserUid    = $user->getUID();
-        $this->currentUserGroups = $groupsHeader;
-    }
+        $user      = $this->userSession->getUser();
+        $agentMode = $this->config->getAppValue(Application::APP_ID, 'agent_mode', '');
 
-    // ── ACL ───────────────────────────────────────────────────────────
-
-    public function getAcl(string $path): array
-    {
-        return $this->get('/api/acl', ['path' => $path]);
-    }
-
-    public function setAcl(string $path, string $groupIdentity, string $permission,
-                           string $action, string $initiatedBy, ?string $comment = null): array
-    {
-        return $this->post('/api/acl', [
-            'path'            => $path,
-            'groupIdentity'   => $groupIdentity,
-            'permission'      => $permission,
-            'action'          => $action,
-            'initiatedByUser' => $initiatedBy,
-            'comment'         => $comment,
+        return new JSONResponse([
+            'agent_url'          => $this->config->getAppValue(Application::APP_ID, 'agent_url',      ''),
+            'bearer_token_set'   => $this->config->getAppValue(Application::APP_ID, 'bearer_token',   '') !== '',
+            'client_cert'        => $this->config->getAppValue(Application::APP_ID, 'client_cert',    ''),
+            'admin_groups'       => json_decode(
+                $this->config->getAppValue(Application::APP_ID, 'admin_groups', '[]'), true) ?? [],
+            // NC пользователи с правами ACL (только Test режим)
+            'nc_admin_users'     => json_decode(
+                $this->config->getAppValue(Application::APP_ID, 'nc_admin_users', '[]'), true) ?? [],
+            'owner_mode_enabled' => $this->config->getAppValue(
+                Application::APP_ID, 'owner_mode_enabled', 'false') === 'true',
+            'timeout'            => (int)$this->config->getAppValue(Application::APP_ID, 'timeout', '10'),
+            'is_admin'           => $user !== null && $this->authService->isAclAdmin($user),
+            'owner_mode'         => $this->config->getAppValue(
+                Application::APP_ID, 'owner_mode_enabled', 'false') === 'true',
+            // Режим агента — кэшируем после успешного теста
+            'agent_mode'         => $agentMode,
+            'verify_ssl'         => $this->config->getAppValue(
+                Application::APP_ID, 'verify_ssl', 'true') === 'true',
         ]);
     }
 
-    public function removeAcl(string $path, string $groupIdentity,
-                              string $initiatedBy, ?string $comment = null): array
+    public function saveSettings(): JSONResponse
     {
-        return $this->delete('/api/acl', [
-            'path'            => $path,
-            'groupIdentity'   => $groupIdentity,
-            'initiatedByUser' => $initiatedBy,
-            'comment'         => $comment,
-        ]);
-    }
+        $params = $this->request->getParams();
+        $saved  = [];
 
-    // ── Группы ────────────────────────────────────────────────────────
+        foreach (self::ALLOWED_KEYS as $key) {
+            if (!array_key_exists($key, $params)) continue;
 
-    public function getFolderGroups(string $folderPath): array
-    {
-        return $this->get('/api/groups', ['path' => $folderPath]);
-    }
+            $value = $params[$key];
 
-    public function createFolderGroups(string $folderPath, string $initiatedBy,
-                                       array $suffixes = ['RO', 'RX', 'RW']): array
-    {
-        return $this->post('/api/groups', [
-            'folderPath'      => $folderPath,
-            'initiatedByUser' => $initiatedBy,
-            'suffixes'        => $suffixes,
-        ]);
-    }
+            if (in_array($key, ['admin_groups', 'nc_admin_users'], true)) {
+                $value = is_array($value) ? json_encode(array_values($value)) : '[]';
+            }
 
-    public function deleteFolderGroups(string $folderPath, string $initiatedBy): array
-    {
-        return $this->delete('/api/groups', [
-            'folderPath'      => $folderPath,
-            'initiatedByUser' => $initiatedBy,
-        ]);
-    }
+            if (in_array($key, ['bearer_token', 'cert_password'], true)
+                && empty($value)) continue;
 
-    // ── Состав группы ─────────────────────────────────────────────────
+            $this->config->setAppValue(Application::APP_ID, $key, (string)$value);
+            $saved[] = $key;
+        }
 
-    public function getGroupMembers(string $groupName): array
-    {
-        return $this->get("/api/groups/{$groupName}/members");
-    }
-
-    public function addGroupMember(string $groupName, string $userSam,
-                                   string $initiatedBy, ?string $comment = null): array
-    {
-        return $this->post("/api/groups/{$groupName}/members", [
-            'userSamName'     => $userSam,
-            'comment'         => $comment,
-        ], $initiatedBy);
-    }
-
-    public function removeGroupMember(string $groupName, string $userSam,
-                                      string $initiatedBy, ?string $comment = null): array
-    {
-        return $this->delete("/api/groups/{$groupName}/members/{$userSam}", [
-            'comment' => $comment,
-        ], $initiatedBy);
-    }
-
-    // ── Пользователи ──────────────────────────────────────────────────
-
-    public function searchUsers(string $query, int $max = 20): array
-    {
-        return $this->get('/api/users/search', ['q' => $query, 'max' => $max]);
-    }
-
-    public function getManagerChain(string $sam): array
-    {
-        return $this->get("/api/users/{$sam}/manager-chain");
-    }
-
-    // ── Health check с диагностикой ───────────────────────────────────
-
-    public function healthCheck(): array
-    {
-        $diagnostics = $this->buildDiagnostics();
-
-        // Логируем в NC (видно в Administration → Logging)
-        $this->logger->info('NcAclManager healthCheck запущен', [
-            'app'  => Application::APP_ID,
-            'diag' => $diagnostics,
+        $this->logger->info('NcAclManager: настройки сохранены: ' . implode(', ', $saved), [
+            'app' => Application::APP_ID,
         ]);
 
-        // Пробуем реальный запрос
+        return new JSONResponse(['success' => true, 'saved_keys' => $saved]);
+    }
+
+    public function testAgent(): JSONResponse
+    {
+        $params = $this->request->getParams();
+
+        $agentUrl    = $params['agent_url']     ?? $this->config->getAppValue(Application::APP_ID, 'agent_url',     '');
+        $bearerToken = !empty($params['bearer_token'])
+            ? $params['bearer_token']
+            : $this->config->getAppValue(Application::APP_ID, 'bearer_token', '');
+        $certPath    = $params['client_cert']   ?? $this->config->getAppValue(Application::APP_ID, 'client_cert',   '');
+        $certPass    = !empty($params['cert_password'])
+            ? $params['cert_password']
+            : $this->config->getAppValue(Application::APP_ID, 'cert_password', '');
+        $timeout     = (int)($params['timeout'] ?? $this->config->getAppValue(Application::APP_ID, 'timeout', '10'));
+
+        $user = $this->userSession->getUser();
+        if ($user !== null) {
+            $this->agentService->setContext($user,
+                $this->authService->getUserAdGroupsHeader($user));
+        }
+
+        $verifySsl = isset($params['verify_ssl'])
+            ? filter_var($params['verify_ssl'], FILTER_VALIDATE_BOOLEAN)
+            : ($this->config->getAppValue(Application::APP_ID, 'verify_ssl', 'true') === 'true');
+
+        $this->agentService->initWithParams($agentUrl, $bearerToken, $certPath, $certPass, $timeout, $verifySsl);
+
+        $diagnostics = $this->agentService->buildDiagnostics();
+        $curlCommand = $this->agentService->buildCurlCommand('GET', '/api/acl/health');
+
         try {
-            $result = $this->get('/api/acl/health');
+            $result = $this->agentService->healthCheck();
 
-            $this->logger->info('NcAclManager healthCheck успешен', [
-                'app'    => Application::APP_ID,
-                'result' => $result,
+            // Кэшируем режим агента (Test/Prod) — используем в настройках
+            if (!empty($result['result']['mode'])) {
+                $this->config->setAppValue(
+                    Application::APP_ID, 'agent_mode', $result['result']['mode']);
+            }
+
+            return new JSONResponse([
+                'success'      => $result['success'] ?? false,
+                'result'       => $result['result']  ?? null,
+                'error'        => $result['error']   ?? null,
+                'diagnostics'  => $diagnostics,
+                'curl_command' => $curlCommand,
+                'agent_mode'   => $result['result']['mode'] ?? null,
             ]);
-
-            return [
-                'success'     => true,
-                'result'      => $result,
-                'diagnostics' => $diagnostics,
-                'curl'        => $this->buildCurlCommand('GET', '/api/acl/health'),
-            ];
         } catch (\Throwable $e) {
-            $this->logger->error('NcAclManager healthCheck ошибка: ' . $e->getMessage(), [
-                'app'  => Application::APP_ID,
-                'diag' => $diagnostics,
+            $this->logger->error('NcAclManager testAgent: ' . $e->getMessage(), [
+                'app' => Application::APP_ID,
             ]);
-
-            return [
-                'success'     => false,
-                'error'       => $e->getMessage(),
-                'diagnostics' => $diagnostics,
-                'curl'        => $this->buildCurlCommand('GET', '/api/acl/health'),
-            ];
+            return new JSONResponse([
+                'success'      => false,
+                'error'        => $e->getMessage(),
+                'diagnostics'  => $diagnostics,
+                'curl_command' => $curlCommand,
+                'agent_mode'   => null,
+            ]);
         }
-    }
-
-    // ── Диагностика ───────────────────────────────────────────────────
-
-    /**
-     * Возвращает диагностические данные для отображения в UI.
-     * Секреты маскируются: показываем первые 2 и последние 2 символа.
-     */
-    public function buildDiagnostics(): array
-    {
-        $certExists = !empty($this->certPath) && file_exists($this->certPath);
-
-        return [
-            'agent_url'      => $this->agentUrl ?: '(не задан)',
-            'bearer_token'   => $this->maskSecret($this->bearerToken),
-            'cert_path'      => $this->certPath ?: '(не задан)',
-            'cert_exists'    => $certExists,
-            'cert_readable'  => $certExists && is_readable($this->certPath),
-            'cert_password'  => $this->maskSecret($this->certPassword),
-            'timeout'        => $this->timeout,
-            'current_user'   => $this->currentUserUid ?? '(не задан)',
-            'user_groups'    => $this->currentUserGroups ?? '(не задан)',
-        ];
     }
 
     /**
-     * Генерирует curl команду для ручного тестирования вне NC.
-     * Токен маскируется — пользователь подставит реальный.
+     * Поиск NC пользователей для добавления в список ACL-admin (только Test режим)
      */
-    public function buildCurlCommand(string $method, string $endpoint, array $body = []): string
+    #[NoAdminRequired]
+    public function searchNcUsers(string $q = ''): JSONResponse
     {
-        $url = rtrim($this->agentUrl, '/') . $endpoint;
-
-        $lines = [
-            "curl -v \\",
-            "  --cert '{$this->certPath}' \\",
-            "  --cert-type P12 \\",
-        ];
-
-        if (!empty($this->certPassword)) {
-            $lines[] = "  --pass '{$this->maskSecret($this->certPassword)}' \\";
+        if (strlen($q) < 2) {
+            return new JSONResponse(['users' => []]);
         }
 
-        $lines[] = "  -H 'Authorization: Bearer {$this->maskSecret($this->bearerToken)}' \\";
-        $lines[] = "  -H 'Content-Type: application/json' \\";
-        $lines[] = "  -H 'Accept: application/json' \\";
-        $lines[] = "  -X {$method} \\";
+        $users = $this->userManager->searchDisplayName($q, 20);
+        $result = array_map(fn($u) => [
+            'uid'         => $u->getUID(),
+            'displayName' => $u->getDisplayName(),
+            'email'       => $u->getEMailAddress() ?? '',
+        ], $users);
 
-        if (!empty($body)) {
-            $json     = json_encode($body, JSON_UNESCAPED_UNICODE);
-            $lines[]  = "  -d '{$json}' \\";
-        }
-
-        $lines[] = "  '{$url}'";
-
-        return implode("\n", $lines);
+        return new JSONResponse(['users' => array_values($result)]);
     }
 
-    // ── HTTP методы ───────────────────────────────────────────────────
-
-    private function get(string $endpoint, array $params = []): array
+    public function uploadCert(): JSONResponse
     {
-        $url = rtrim($this->agentUrl, '/') . $endpoint;
-        if (!empty($params)) {
-            $url .= '?' . http_build_query($params);
+        $file = $this->request->getUploadedFile('cert');
+
+        if (empty($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+            return new JSONResponse(
+                ['error' => $this->uploadErrorMessage($file['error'] ?? UPLOAD_ERR_NO_FILE)],
+                Http::STATUS_BAD_REQUEST
+            );
         }
 
-        $response = $this->httpClientService->newClient()->get($url, $this->options());
-        return $this->parse($response);
-    }
-
-    private function post(string $endpoint, array $body = [], string $initiatedBy = ''): array
-    {
-        if ($initiatedBy !== '') {
-            $body['initiatedByUser'] = $initiatedBy;
+        $ext = strtolower(pathinfo($file['name'] ?? '', PATHINFO_EXTENSION));
+        if (!in_array($ext, ['pfx', 'p12'], true)) {
+            return new JSONResponse(
+                ['error' => 'Допустимы только файлы .pfx или .p12'],
+                Http::STATUS_BAD_REQUEST
+            );
         }
 
-        $opts = array_merge($this->options(), [
-            'body'    => json_encode($body),
-            'headers' => $this->headers(),
+        $certDir  = \OC::$SERVERROOT . '/data/ncaclmanager/certs';
+        $certPath = $certDir . '/client.pfx';
+
+        if (!is_dir($certDir) && !mkdir($certDir, 0750, true)) {
+            return new JSONResponse(
+                ['error' => "Не удалось создать директорию: {$certDir}"],
+                Http::STATUS_INTERNAL_SERVER_ERROR
+            );
+        }
+
+        if (!move_uploaded_file($file['tmp_name'], $certPath)) {
+            return new JSONResponse(
+                ['error' => "Не удалось сохранить файл в: {$certPath}"],
+                Http::STATUS_INTERNAL_SERVER_ERROR
+            );
+        }
+
+        $this->config->setAppValue(Application::APP_ID, 'client_cert', $certPath);
+
+        return new JSONResponse([
+            'success'   => true,
+            'cert_path' => $certPath,
+            'size'      => $file['size'],
         ]);
-
-        $response = $this->httpClientService->newClient()
-            ->post(rtrim($this->agentUrl, '/') . $endpoint, $opts);
-
-        return $this->parse($response);
     }
 
-    private function delete(string $endpoint, array $body = [], string $initiatedBy = ''): array
+    private function uploadErrorMessage(int $code): string
     {
-        if ($initiatedBy !== '') {
-            $body['initiatedByUser'] = $initiatedBy;
-        }
-
-        $opts = array_merge($this->options(), [
-            'body'    => json_encode($body),
-            'headers' => $this->headers(),
-        ]);
-
-        $response = $this->httpClientService->newClient()
-            ->delete(rtrim($this->agentUrl, '/') . $endpoint, $opts);
-
-        return $this->parse($response);
-    }
-
-    private function options(array $extra = []): array
-    {
-        $opts = [
-            'timeout' => $this->timeout,
-            'verify'  => true,
-            'headers' => $this->headers(),
-        ];
-
-        // Клиентский сертификат (mTLS)
-        if (!empty($this->certPath)) {
-            $opts['cert'] = [$this->certPath, $this->certPassword];
-        }
-
-        return array_merge($opts, $extra);
-    }
-
-    private function headers(): array
-    {
-        $requestId = date('Ymd-His') . '-' . bin2hex(random_bytes(4));
-        return [
-            'Authorization'  => 'Bearer ' . $this->bearerToken,
-            'Content-Type'   => 'application/json',
-            'Accept'         => 'application/json',
-            'X-Request-Id'   => $requestId,
-            'X-Nc-User'      => $this->currentUserUid    ?? '',
-            'X-Nc-User-Groups' => $this->currentUserGroups ?? '',
-        ];
-    }
-
-    private function parse($response): array
-    {
-        $body = $response->getBody();
-        $data = json_decode($body, true);
-
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            throw new \RuntimeException('Невалидный JSON от агента: ' . substr($body, 0, 200));
-        }
-
-        return $data ?? [];
-    }
-
-    // ── Утилиты ───────────────────────────────────────────────────────
-
-    /**
-     * Маскирует секрет: показывает первые 2 и последние 2 символа.
-     * Пустой → "(не задан)", короткий → "***".
-     */
-    private function maskSecret(string $secret): string
-    {
-        if (empty($secret)) return '(не задан)';
-        $len = mb_strlen($secret);
-        if ($len <= 6) return str_repeat('*', $len);
-        return mb_substr($secret, 0, 2) . str_repeat('*', $len - 4) . mb_substr($secret, -2);
+        return match($code) {
+            UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => 'Файл слишком большой',
+            UPLOAD_ERR_NO_FILE    => 'Файл не выбран',
+            UPLOAD_ERR_NO_TMP_DIR => 'Нет временной директории на сервере',
+            UPLOAD_ERR_CANT_WRITE => 'Ошибка записи на диск',
+            default               => "Ошибка загрузки (код {$code})",
+        };
     }
 }

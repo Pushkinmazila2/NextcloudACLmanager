@@ -74,7 +74,10 @@ export default {
   name: 'AclPanel',
   components: { AclGroupRow },
   props: {
+    /** UNC путь к папке на Windows шаре (\\SERVER\Share\folder) */
     folderPath: { type: String, required: true },
+    /** Оригинальный NC путь (/mountpoint/folder) — для отображения */
+    ncPath:     { type: String, default: '' },
     isAdmin:    { type: Boolean, default: false },
   },
   setup(props) {

@@ -1,7 +1,5 @@
 <?php
-
 declare(strict_types=1);
-
 return [
     'routes' => [
         // ── ACL ──────────────────────────────────────────────────────
@@ -22,8 +20,15 @@ return [
         ['name' => 'users#managerChain', 'url' => '/api/users/{sam}/manager-chain', 'verb' => 'GET'],
 
         // ── Настройки ────────────────────────────────────────────────
-        ['name' => 'settings#getSettings',  'url' => '/api/settings',            'verb' => 'GET'],
-        ['name' => 'settings#saveSettings', 'url' => '/api/settings',            'verb' => 'POST'],
-        ['name' => 'settings#testAgent',    'url' => '/api/settings/test-agent', 'verb' => 'POST'],
+        ['name' => 'settings#getSettings',   'url' => '/api/settings',               'verb' => 'GET'],
+        ['name' => 'settings#saveSettings',  'url' => '/api/settings',               'verb' => 'POST'],
+        ['name' => 'settings#testAgent',     'url' => '/api/settings/test-agent',    'verb' => 'POST'],
+        ['name' => 'settings#uploadCert',    'url' => '/api/settings/upload-cert',   'verb' => 'POST'],
+        ['name' => 'settings#searchNcUsers', 'url' => '/api/settings/nc-users',      'verb' => 'GET'],
+
+        // ── Маппинги NC путей → UNC ──────────────────────────────────
+        ['name' => 'mounts#index',      'url' => '/api/mounts',       'verb' => 'GET'],
+        ['name' => 'mounts#adminIndex', 'url' => '/api/mounts/admin', 'verb' => 'GET'],
+        ['name' => 'mounts#save',       'url' => '/api/mounts',       'verb' => 'POST'],
     ],
 ];

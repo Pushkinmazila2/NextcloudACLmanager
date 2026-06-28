@@ -7,7 +7,7 @@ namespace OCA\NcAclManager\Service;
 use OCA\NcAclManager\AppInfo\Application;
 use OCP\Http\Client\IClientService;
 use OCP\IConfig;
-use OCP\ILogger;
+use Psr\Log\LoggerInterface;
 use Ramsey\Uuid\Uuid;
 
 class AgentService
@@ -24,7 +24,7 @@ class AgentService
     public function __construct(
         private readonly IClientService $httpClientService,
         private readonly IConfig        $config,
-        private readonly ILogger        $logger,
+        private readonly LoggerInterface $logger,
     ) {
         $this->agentUrl    = $config->getAppValue(Application::APP_ID, 'agent_url',      '');
         $this->bearerToken = $config->getAppValue(Application::APP_ID, 'bearer_token',   '');
@@ -130,10 +130,72 @@ class AgentService
     public function healthCheck(): array
     {
         try {
-            return $this->get('/api/acl/health');
+            $result = $this->get('/api/acl/health');
+            return [
+                'status' => 'ok',
+                'result' => $result,
+            ];
         } catch (\Throwable $e) {
             return ['error' => $e->getMessage()];
         }
+    }
+
+    private function maskSecret(?string $value): ?string
+    {
+        if (!$value) {
+            return null;
+        }
+
+        $len = strlen($value);
+
+        if ($len <= 4) {
+            return str_repeat('*', $len);
+        }
+
+        return substr($value, 0, 2)
+            . str_repeat('*', $len - 4)
+            . substr($value, -2);
+    }
+
+    private function getCertFingerprint(): ?string
+    {
+        if (!$this->certPath || !file_exists($this->certPath)) {
+            return null;
+        }
+
+        $pfx = file_get_contents($this->certPath);
+
+        if (!openssl_pkcs12_read($pfx, $certs, $this->certPassword)) {
+            return null;
+        }
+
+        $parsed = openssl_x509_parse($certs['cert']);
+
+        return $parsed['serialNumberHex'] ?? null;
+    }
+
+    private function buildDebugSnapshot(string $url, array $opts): array
+    {
+        return [
+            'url' => $url,
+
+            'bearer' => $this->maskSecret($this->bearerToken),
+            'cert_password' => $this->maskSecret($this->certPassword),
+
+            'cert_path' => basename($this->certPath),
+            'cert_fingerprint' => $this->getCertFingerprint(),
+
+            'timeout' => $this->timeout,
+
+            'headers' => [
+                'Authorization' => 'Bearer ***',
+                'Content-Type'  => $opts['headers']['Content-Type'] ?? null,
+                'Accept'        => $opts['headers']['Accept'] ?? null,
+                'X-Request-Id'  => $opts['headers']['X-Request-Id'] ?? null,
+                'X-Nc-User'     => $opts['headers']['X-Nc-User'] ?? null,
+                'X-Nc-Groups'   => $opts['headers']['X-Nc-User-Groups'] ?? null,
+            ],
+        ];
     }
 
     // ── HTTP методы ───────────────────────────────────────────────────
@@ -141,11 +203,19 @@ class AgentService
     private function get(string $endpoint, array $params = []): array
     {
         $url = $this->agentUrl . $endpoint;
-        if (!empty($params)) {
-            $url .= '?' . http_build_query($params);
+
+        $opts = $this->options();
+
+        $isDebug = $endpoint === '/api/acl/health';
+
+        if ($isDebug) {
+            $this->logger->info('AGENT DEBUG SNAPSHOT', [
+                'snapshot' => $this->buildDebugSnapshot($url, $opts),
+            ]);
         }
 
-        $response = $this->client()->get($url, $this->options());
+        $response = $this->client()->get($url, $opts);
+
         return $this->parse($response);
     }
 
